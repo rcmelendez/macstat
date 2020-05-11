@@ -1,0 +1,507 @@
+#!/usr/bin/env bash
+# 
+# macstat - Bash shell script that collects macOS system metrics for Devo
+#           Data Analytics Platform.
+#
+# It collects almost 30 system metrics in a log file ready to be sent to 
+# the Devo Cloud using a third-party syslog application such as syslog-ng. 
+#
+# This project was inspired by Dstat and Devo Monitor.
+# 
+#
+#/ Version:  0.1.0
+#/ Author:   Roberto Meléndez  [Cambridge, USA]
+#/ Medium:   https://medium.com/@rcmelendez/macos-monitoring-with-devo-422e502937bd
+#/ GitHub:   https://github.com/rcmelendez/macstat
+#/ Contact:  @rcmelendez on LinkedIn, Medium, and GitHub
+#/ Released: May 11, 2020
+
+
+set -euo pipefail
+
+
+#######################################
+# USER SETTINGS
+#
+# macstat directory 
+declare -r MACSTAT_DIR=/Users/roberto
+# Devo Logs directory, macstat will create this directory if it doesn't exist
+declare -r DEVOLOGS_DIR=${MACSTAT_DIR}/Library/Logs/Devo
+
+# Custom iotop directory
+declare -r IOTOP_DIR=/usr/local/bin
+# networkStats directory 
+declare -r NET_DIR=${MACSTAT_DIR}
+# top command output file
+declare -r TOP_FILE=/tmp/top
+
+# iotop time interval in seconds
+declare -i DSK_INTERVAL=5
+# networkStats time interval in seconds
+declare -i NET_INTERVAL=5
+
+#######################################
+
+
+scriptName="${0##*/}"
+scriptDir="${0%/*}"
+
+# Results array
+declare -a stats
+# Page size
+declare -i psize
+
+
+# Print help
+print_usage() {
+  cat <<EOF
+TESTING
+----------  
+USAGE: sudo $scriptDir/$scriptName [options]
+
+  -a      list all system metrics
+  -h      show help 
+  -V      display version info
+
+
+For complete instructions on running $scriptName, please review the README file 
+on GitHub. For the full guide on sending macstat log file to Devo, read the 
+Medium article.
+
+
+RUN IT!
+----------
+If $scriptName created a log file successfully, add it to the root crontab 
+to be scheduled to run every minute:
+
+* * * * * $MACSTAT_DIR/$scriptName
+
+EOF
+}
+
+
+# Print all system metrics collected by macstat
+all_stats() {
+  cat <<EOF
+
+CPU
+   cpuUsr    .....  % of time spent running user processes (user & nice time). 
+   cpuSys    .....  % of time spent running kernel processes. 
+   cpuIdl    .....  % of time spent in the kernel idle handler.
+   cpuWai    .....  N/A
+   cpuHiq    .....  N/A  
+   cpuSiq    .....  N/A
+   cpuSte    .....  N/A
+   cpuGue    .....  N/A
+
+Disk
+   dskRead   .....  Data read in bytes/sec.
+   dskWrit   .....  Data written in bytes/sec.
+
+Page 
+   pagingIn  .....  Total number of requests for pages from a pager (such as the inode pager).
+   pagingOut .....  Total number of pages that have been paged out.
+
+Memory
+   memUsed   .....  Total memory used in bytes (App memory, wired, and compressed).
+   memBuff   .....  Total memory purgable in bytes.
+   memCach   .....  Total number of cached files in bytes.
+   memFree   .....  Total memory free in bytes (including cached files).
+
+Swap
+   swapUsed  .....  Total swap memory used in bytes.
+   swapFree  .....  Total swap memory free in bytes.
+
+System
+   systemInt .....  [TODO] Total number of interrupts.
+   systemCsw .....  [TODO] Total number of context switches across all CPUs.
+
+Process
+   procsRun  .....  Total number of current processes in runnable state.
+   procsBlk  .....  Total number of current processes in uninterruptible wait.
+   procsNew  .....  Total number of current threads.
+
+Load
+   loadOne   .....  Load average over 1 minute.
+   loadFiv   .....  Load average over 5 minutes.
+   loadFif   .....  Load average over 15 minutes.
+
+Network
+   netRecv   .....  Data received in bytes/sec.
+   netSend   .....  Data sent in bytes/sec.
+
+Total Procesess
+   proTotal  .....  Total number of processes currently running. 
+   proPid    .....  PID of the process with the highest CPU usage.
+
+Total CPUs
+   cpusPro   .....  Total number of processors.
+   cpusCor   .....  Total number of cores.
+   cpusDie   .....  Total number of dies.
+
+EOF
+}
+
+# Options
+while getopts ":ahV" flag; do
+  case "${flag}" in
+    a)  all_stats; exit 0 ;;
+    h)  print_usage; exit 0 ;;
+    V)  grep '^#/' <"$0" | cut -c4-; exit 0 ;;
+    \?) printf "Oops! Unknown option: -%s\n" "$OPTARG"
+        print_usage; exit 1 ;;
+  esac >&2
+done
+shift "$((OPTIND - 1))"
+
+
+if (( $# != 0 )); then
+  print_usage
+  exit 1
+fi
+
+
+#######################################
+# Print top command output to a file.
+# 
+# The top command runs for 1 sec without displaying processes. 
+# The output is saved to a file used by macstat_vcpu, macstat_load, 
+# macstat_proc, and macstat_tproc.
+# 
+# Globals:
+#   TOP_FILE
+# Outputs:
+#   /tmp/top
+top_stats() {
+  top -l1 -n0 > "${TOP_FILE}"
+}
+
+
+#######################################
+# Get CPU usage stats.
+#
+# Reads the TOP_FILE file and gets the percentage of processor usage, broken 
+# into user, system, and idle components. The other 5 variables are not 
+# available in macOS, so they get assigned a value of 0.
+# We cannot remove them since the Devo parser expects those values.
+#
+# Returns:
+#   cpuUsr
+#   cpuSys
+#   cpuIdl
+#   cpuWai
+#   cpuHiq
+#   cpuSiq 
+#   cpuSte
+#   cpuGue
+macstat_vcpu() {
+  local cpuUsr cpuSys cpuIdl
+  cpuUsr=$(awk 'NR == 4 {printf "%.3f\n", $3}' $TOP_FILE)
+  cpuSys=$(awk 'NR == 4 {printf "%.3f\n", $5}' $TOP_FILE)
+  cpuIdl=$(awk 'NR == 4 {printf "%.3f\n", $7}' $TOP_FILE)
+  # I/O wait is a subcategory of idle time, but not tracked. 
+  local -i cpuWai=0
+  # Servicing interrupts and softirqs are handled automatically by macOS. 
+  local -i cpuHiq=0
+  local -i cpuSiq=0
+  # Steal and Guest times are also not available.
+  local -i cpuSte=0
+  local -i cpuGue=0
+  stats+=("$cpuUsr" "$cpuSys" "$cpuIdl" "$cpuWai" "$cpuHiq" "$cpuSiq" "$cpuSte" "$cpuGue")
+}
+
+
+#######################################
+# Get disk stats.
+# 
+# Executes a custom iotop command for DSK_INTERVAL secs (default = 5) and gets 
+# data read and written in KB. Then it calculates both values in bytes/sec. 
+#
+# Returns:
+#   dskRead
+#   dskWrit
+macstat_disk() {
+  local -i interval=DSK_INTERVAL 
+  # Added improved settings recommended by iotop's author to address dynamic
+  # variable drops errors. Since iotop is a DTrace script, you need 2 steps:
+  # 1. Disable System Integrity Proctection (SIP). 
+  # 2  Run it with root privileges.
+  # Using the default /usr/bin/iotop command will show inaccurate results.
+  local -r iotop=${IOTOP_DIR}/iotop
+  local dskStats
+  if [[ -f "${iotop}" ]]; then
+    dskStats=$($iotop -C $interval 1 2>/dev/null | awk 'NR == 2')
+  else 
+    echo "${iotop} does not exist"
+    echo "Change path of IOTOP_DIR variable in the USER SETTINGS section." 
+    echo "Recommended path: /usr/local/bin"
+    exit 1
+  fi  
+  local dskRead dskWrit
+  dskRead=$(echo "${dskStats}" | awk -v i="${interval}" '{printf "%.3f\n", $8 * 1024 / i}')
+  dskWrit=$(echo "${dskStats}" | awk -v i="${interval}" '{printf "%.3f\n", $11 * 1024 / i}')
+  stats+=("$dskRead" "$dskWrit")
+
+  # If you don't want or can't disable SIP, then use iostat command instead. 
+  # Root privileges are not necessary, but you'll have to do some additional 
+  # calculations. The output shows data transferred in MB, which includes 
+  # data read and written. To get you started run the following command 
+  # to get data transferred in bytes/sec.
+  # dskTrans=$(/usr/sbin/iostat -Idw $interval -c 2 disk0 | awk -v i="${interval}" 'NR == 4 {printf "%.3f\n", $3 * 1048576 / i}')
+}
+
+
+#######################################
+# Get memory stats.
+#
+# The vm_stat command runs for 2 secs. The 2nd line of results is extracted, 
+# since the 1st one has system-wide stats since boot. Then, those values are 
+# saved to a global variable that will be used by macstat_page and macstat_mem.
+#
+# Globals:
+#   vmstat
+mem_stats() {
+  vmstat=$(/usr/bin/vm_stat -c 2 1 | awk 'NR == 4')
+}
+
+
+#######################################
+# Get page stats.
+#
+# Gathers the hardware page size and the number of pages in and out. Then it 
+# calculates both values in bytes.
+#
+# Returns:
+#   pagingIn 
+#   pagingOut
+macstat_page() {
+  psize=$(/usr/sbin/sysctl -n hw.pagesize)
+  local -i pagingIn pagingOut
+  pagingIn=$(echo "${vmstat}" | awk -v pg="${psize}" '{print $19 * pg}')
+  pagingOut=$(echo "${vmstat}" | awk -v pg="${psize}" '{print $20 * pg}')
+  stats+=("$pagingIn" "$pagingOut")
+}
+
+
+#######################################
+# Get memory stats.
+#
+# Reads the vmstat values in pages and then translate them into bytes.
+#
+# Returns:
+#   memUsed 
+#   memBuff
+#   memCach
+#   memFree
+macstat_mem() {
+  # App Memory = Anonymous pages - Pages purgeable
+  local -i anon purg appMem
+  anon=$(echo "${vmstat}" | awk '{print $14}')
+  purg=$(echo "${vmstat}" | awk '{print $7}')
+  appMem=$(( anon - purg ))
+  # Memory Used = App Memory + Wired Memory + Compressed
+  local -i wired compr
+  wired=$(echo "${vmstat}" | awk '{print $6}')
+  compr=$(echo "${vmstat}" | awk '{print $16}')
+  local -i memUsed 
+  memUsed=$(( (appMem + wired + compr) * psize ))
+  # Cached Files = Physical Memory - Memory Free - Memory Used
+  local -i memTotal memFree memCach memBuff
+  memTotal=$(/usr/sbin/sysctl -n hw.memsize)
+  memFree=$(echo "${vmstat}" | awk -v pg="${psize}" '{print $1 * pg}')
+  memCach=$(( memTotal - memFree - memUsed ))
+  # Pages purgable = Memory Buffers
+  memBuff=$(( purg * psize ))
+  stats+=("$memUsed" "$memBuff" "$memCach" "$memFree")
+}
+
+
+#######################################
+# Get swap usage.
+#
+# Reads the swap memory usage and extracts the swap used and free in MB. 
+# Then it calculates both values in bytes.
+#
+# Returns:
+#   swapUsed
+#   swapFree
+macstat_swap() {
+  local -i swapUsed swapFree
+  swapUsed=$(/usr/sbin/sysctl vm.swapusage | awk '{print $7 * 1048576}')
+  swapFree=$(/usr/sbin/sysctl vm.swapusage | awk '{print $10 * 1048576}')
+  stats+=("$swapUsed" "$swapFree")
+}
+
+
+#######################################
+# TODO
+# Get system stats.
+#
+# The total number of interrupts and context switches (scheduling).
+#
+# Returns:
+#   systemInt
+#   systemCsw
+macstat_sys() {
+  local -i systemInt=0
+  local -i systemCsw=0
+  stats+=("$systemInt" "$systemCsw")
+}
+
+
+#######################################
+# Get process stats.
+#
+# The total current processes in runnable state, uninterruptible wait, 
+# and total threads.
+#
+# Returns:
+#   procsRun
+#   procsBlk
+#   procsNew
+macstat_proc() {
+  local -i procsRun procsBlk procsNew
+  procsRun=$(ps axo state | grep -c "R" || true)
+  # Processes in uninterruptible wait = blocked
+  procsBlk=$(ps axo state | grep -c "U" || true)
+  # Threads (instead of new processes)
+  procsNew=$(awk 'NR == 1 {print $(NF - 1)}' $TOP_FILE)
+  stats+=("$procsRun" "$procsBlk" "$procsNew")
+}
+
+
+#######################################
+# Get load average stats.
+#
+# The average number of jobs in the run queue over 1, 5, and 15 minutes. 
+#
+# Returns:
+#   loadOne
+#   loadFiv
+#   loadFif
+macstat_load() {
+  local loadOne loadFiv loadFif
+  loadOne=$(awk 'NR == 3 {printf "%.3f\n", $3}' $TOP_FILE)
+  loadFiv=$(awk 'NR == 3 {printf "%.3f\n", $4}' $TOP_FILE)
+  loadFif=$(awk 'NR == 3 {printf "%.3f\n", $5}' $TOP_FILE)
+  stats+=("$loadOne" "$loadFiv" "$loadFif")
+}
+
+
+#######################################
+# Get network stats.
+#
+# Runs networkStats program to get total bytes sent and received since boot. 
+# Waits for NET_INTERVAL secs (default = 5) and runs it again. Then it
+# calculates the delta values in bytes/sec.
+#
+# Returns:    
+#   netRecv
+#   netSend
+macstat_net() {
+  local -i interval=NET_INTERVAL
+  local start finish
+  local -r net=${NET_DIR}/networkStats
+  if [[ -f "${net}" ]]; then
+    start=$("${net}")
+    sleep $interval
+    finish=$("${net}")
+  else
+    echo "${net} does not exist"
+    echo "Change path of NET_DIR variable in the USER SETTINGS section." 
+    echo "Recommended path: ${MACSTAT_DIR}"
+    exit 1      
+  fi
+  local -i in1 in2 out1 out2
+  in1=$(echo "${start}" | awk '{print $2}')
+  out1=$(echo "${start}" | awk '{print $4}')
+  in2=$(echo "${finish}" | awk '{print $2}')
+  out2=$(echo "${finish}" | awk '{print $4}')
+  local netRecv netSend
+  netRecv=$(echo "scale=1;($in2 - $in1) / $interval" | bc)
+  netSend=$(echo "scale=1;($out2 - $out1) / $interval" | bc)
+  stats+=("$netRecv" "$netSend")
+}
+
+
+#######################################
+# Get total processes.
+#
+# Total number of processes currently running and PID of the process with 
+# the highest CPU usage. 
+#
+# Returns:
+#   proTotal
+#   proPid
+macstat_tproc() {
+  local -i proTotal proPid
+  proTotal=$(awk 'NR == 1 {print $2}' $TOP_FILE)
+  proPid=$(ps -eo pcpu,pid,user,args | sort -k1 -r -n | awk 'NR == 1 {print $2}')
+  stats+=("$proTotal" "$proPid")
+}
+
+
+#######################################
+# Get total CPUs.
+#
+# Number of CPUs, considering processor (threads), cores, and physical dies.
+#
+# Returns:
+#   cpusPro
+#   cpusCor
+#   cpusDie
+macstat_corecnt() {
+  local -i cpusPro cpusCor cpusDie
+  cpusPro=$(/usr/sbin/sysctl -n hw.logicalcpu)
+  cpusCor=$(/usr/sbin/sysctl -n hw.physicalcpu)
+  cpusDie=1
+  stats+=("$cpusPro" "$cpusCor" "$cpusDie")
+}
+
+
+#######################################
+# Print all stats to a log file.
+#
+# Appends a string comprised of 33 comma-separated values to
+# DEVOLOGS_DIR/macstat.log file. This file will be sent to the Devo platform 
+# using a third-party syslog application (syslog-ng). I created a couple 
+# of sample config files in the extras directory to send events either 
+# through a Devo Relay or directly the Devo Cloud over a secure channel.
+#
+# Globals:
+#   DEVOLOGS_DIR
+# Output:
+#   DEVOLOGS_DIR/macstat.log
+macstat_log() {
+  local macStats
+  macStats=$(IFS=,; echo "${stats[*]}")
+  if [[ ! -d "${DEVOLOGS_DIR}" ]]; then
+    mkdir -p "${DEVOLOGS_DIR}"
+  fi  
+  echo "${macStats}" >> "${DEVOLOGS_DIR}"/macstat.log
+  echo "$scriptName finished successfully"
+  echo "Log: ${DEVOLOGS_DIR}/macstat.log"
+}
+
+
+#######################################
+# Order does matter! Execute all functions in the order below. The 
+# Devo parser expects this sequence to parse all fields correctly. 
+main() {
+  top_stats
+  macstat_vcpu
+  macstat_disk
+  mem_stats
+  macstat_page
+  macstat_mem
+  macstat_swap
+  macstat_sys
+  macstat_proc
+  macstat_load
+  macstat_net
+  macstat_tproc
+  macstat_corecnt
+  macstat_log
+}
+
+main "$@"

@@ -1,0 +1,57 @@
+#############################################################################
+# syslog-ng.conf file that monitors events in macstat.log
+# and forwards them to a Devo Relay
+#
+#
+# Author:   Roberto Meléndez  [Cambridge, USA]
+# GitHub:   https://github.com/rcmelendez/macstat
+# Created:  April 9, 2020
+
+
+@version: 3.25
+@include "scl.conf"
+
+
+options { 
+	mark-freq(0);
+};
+
+########################
+# Sources
+########################
+
+source s_local { 
+	internal(); 
+};
+
+source s_dstat {
+	file("/Users/roberto/Library/Logs/Devo/macstat.log" follow-freq(1) flags(no-parse));
+};
+
+########################
+# Destinations
+########################
+
+destination d_local {
+	file("/var/log/syslog-ng.log");
+};
+
+destination d_devo_dstat {
+	# replace these values with your Devo Relay IP address and port
+	network("192.168.0.99" port(13003) template("<$PRI>$DATE $HOST box.stat.unix.dstat-lt1: $MESSAGE\n"));
+};
+
+########################
+# Log paths
+########################
+
+log {
+	source(s_local);
+	destination(d_local);
+};
+
+log {
+	source(s_dstat);
+	destination(d_devo_dstat);
+};
+
