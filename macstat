@@ -9,7 +9,7 @@
 # This project was inspired by Dstat and Devo Monitor.
 # 
 #
-#/ Version:  0.1.0
+#/ Version:  1.0.0
 #/ Author:   Roberto Meléndez  [Cambridge, USA]
 #/ Medium:   https://medium.com/@rcmelendez/macos-monitoring-with-devo-422e502937bd
 #/ GitHub:   https://github.com/rcmelendez/macstat
@@ -224,7 +224,7 @@ macstat_disk() {
   local -i interval=DSK_INTERVAL 
   # Added improved settings recommended by iotop's author to address dynamic
   # variable drops errors. Since iotop is a DTrace script, you need 2 steps:
-  # 1. Disable System Integrity Proctection (SIP). 
+  # 1. Disable DTrace restrictions. 
   # 2  Run it with root privileges.
   # Using the default /usr/bin/iotop command will show inaccurate results.
   local -r iotop=${IOTOP_DIR}/iotop
@@ -466,7 +466,7 @@ macstat_corecnt() {
 # DEVOLOGS_DIR/macstat.log file. This file will be sent to the Devo platform 
 # using a third-party syslog application (syslog-ng). I created a couple 
 # of sample config files in the extras directory to send events either 
-# through a Devo Relay or directly the Devo Cloud over a secure channel.
+# through a Devo Relay or directly to the Devo Cloud over a secure channel.
 #
 # Globals:
 #   DEVOLOGS_DIR
@@ -479,7 +479,7 @@ macstat_log() {
     mkdir -p "${DEVOLOGS_DIR}"
   fi  
   echo "${macStats}" >> "${DEVOLOGS_DIR}"/macstat.log
-  echo "$scriptName finished successfully"
+  echo "${scriptName} finished successfully"
   echo "Log: ${DEVOLOGS_DIR}/macstat.log"
 }
 
