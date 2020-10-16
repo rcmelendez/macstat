@@ -1,7 +1,7 @@
 # macstat
 Bash shell script that collects macOS system metrics for [Devo Data Analytics Platform](http://devo.com).
 
-It collects almost 30 system metrics in a log file ready to be sent to Devo using a third-party syslog application such as syslog-ng. [Dstat](https://github.com/dstat-real/dstat) and [Devo Monitor](https://docs.devo.com/confluence/ndt/sending-data-to-devo/event-sources/unix-like-machines/configuration-packages-for-nix) inspired this project.
+It collects almost 30 system metrics in a log file ready to be sent to Devo using a third-party syslog application such as syslog-ng. [Dstat](https://github.com/dstat-real/dstat) and [Devo Monitor](https://docs.devo.com/confluence/ndt/sending-data-to-devo/event-sources/unix-like-machines/installing-devo-packages-for-nix) inspired this project.
 
 
 ## Prerequisites
